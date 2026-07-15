@@ -118,6 +118,56 @@ def extrair_feriados_prophet(df):
     
     return df_feriados_prophet
 
+def promover_modelo_campeao(df_bruto, parametros):
+    """
+    Função para realizar a promoção do modelo campeão, no caso o que tem menor MAPE.
+    """
+    periodo_teste = 30
+    frequencia = 'D'
+
+    # 1. Extração automatizada de feriados
+    print("Mapeando feriados e eventos diretamente dos dados históricos...")
+    df_feriados = extrair_feriados_prophet(df_bruto)
+
+    # 2. Conversão e preparação (Padrão Prophet)
+    print("Preparando features temporais...")
+    df_prophet = df_bruto[['Date', 'Sales']].copy()
+    df_prophet.rename(columns={'Date': 'ds', 'Sales': 'y'}, inplace=True)
+    df_prophet['ds'] = pd.to_datetime(df_prophet['ds'])
+    df_prophet = df_prophet.sort_values('ds').reset_index(drop=True)
+
+    # ==========================================
+    # 3. Divisão Temporal Dinâmica (Train / Test Split)
+    # ==========================================
+    # Usamos o pd.to_timedelta para subtrair exatamente o tempo especificado da data máxima
+    delta_tempo = pd.to_timedelta(periodo_teste, unit=frequencia)
+    ponto_corte = df_prophet['ds'].max() - delta_tempo
+    
+    df_treino = df_prophet[df_prophet['ds'] <= ponto_corte]
+    df_teste = df_prophet[df_prophet['ds'] > ponto_corte]
+    
+    print(f"Corte temporal estabelecido em: {ponto_corte.date()}")
+    print(f"Treino: {df_treino.shape[0]} linhas | Teste: {df_teste.shape[0]} linhas")
+
+    # 4. Instanciar e treinar o modelo campeão
+    modelo = Prophet(**parametros, holidays=df_feriados)
+    inicio_treino = time.time()
+    modelo.fit(df_treino)
+    fim_treino = time.time()
+    tempo_execucao = round(fim_treino - inicio_treino, 2)
+
+    print("Modelo treinado, gerando previsões...")
+    # 5. Previsão dos próximos 30 dias.
+    previsao = modelo.predict(df_teste[['ds']])
+    df_avaliacao = df_teste[['ds', 'y']].merge(previsao[['ds', 'yhat', 'yhat_upper', 'yhat_lower']], on='ds', how='inner')
+
+    # 6. Verifica as métricas.
+    metricas = calcular_metricas_completas(df_avaliacao, col_real='y', col_pred='yhat', retorno_dict=True)
+    print("Processo finalizado :)\nMétricas no modelo campeão:\n")
+    print(metricas)
+
+    return df_avaliacao
+
 def executar_pipeline_otimizacao(df_bruto, grid_parametros, periodo_teste=30, frequencia='D', arquivo_log="../data/experimentos_prophet.csv"):
     """
     Pipeline automatizado para rodar múltiplos experimentos com o Prophet.
@@ -274,3 +324,4 @@ def executar_pipeline_validacao_cruzada(df_bruto, grid_parametros, initial, peri
         df_registro.to_csv(arquivo_log, mode='a', header=gravar_cabecalho, index=False)
         
     print(f"\nPipeline de Validação Cruzada concluído com sucesso! Histórico salvo em: {arquivo_log}")
+    return df_registro
